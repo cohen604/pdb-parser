@@ -1,4 +1,5 @@
-from typing import Optional
+from typing import Optional, Union, List
+import argparse
 
 THREE_SYMBOLS_TO_ONE = {
     "Ala": "A",
@@ -104,22 +105,65 @@ class AtomRecord:
         self.temperature_factor = float(temperature_factor.strip())
 
 
-def main():
-    file_path = "Bfr2_align122resample.pdb"
+class Chain:
+    atoms: List[AtomRecord]
+    chain_id: Optional[str]
 
-    chains = []
-    with open(file_path, 'r', encoding="UTF-8") as fhand:
-        chain = []
+    def __init__(self, atoms: List[AtomRecord] = []):
+        self.atoms = atoms
+        self.chain_id = None
+        self._set_chain_id()
+
+    def change_occupancy(self, occupancy: float):
+        for atom in self.atoms:
+            atom.occupancy = occupancy
+
+    def append_atom(self, atom: AtomRecord):
+        self.atoms.append(atom)
+        if self.chain_id is None:
+            self._set_chain_id()
+
+    def _set_chain_id(self):
+        if len(self.atoms) > 0 and self.chain_id is None:
+            self.chain_id = self.atoms[0].chain_ID
+
+
+class PDB:
+    chains: List[Chain]
+
+    def __init__(self, chains: List[Chain] = []):
+        self.chains = chains
+
+    def append_chain(self, chain: Chain):
+        self.chains.append(chain)
+
+    def change_occupancy(self, occupancy: float, chain_id: str = "ALL"):
+        for chain in self.chains:
+            if chain_id == chain.chain_id or chain_id == "ALL":
+                chain.change_occupancy(occupancy)
+
+    def write_to_pdb_file(self):
+        pass
+
+
+def parse_pdb_from_file(pdb_path: str) -> PDB:
+    pdb = PDB()
+    with open(pdb_path, 'r', encoding="UTF-8") as fhand:
+        chain = Chain([].copy())
         for line in fhand:
             if not line.startswith("ATOM"):
                 if line.startswith("TER"):
-                    chains.append(chain)
-                    chain = []
+                    pdb.append_chain(chain)
+                    chain = Chain([].copy())
                     continue
                 continue
             atom = AtomRecord(line)
-            chain.append(atom)
+            chain.append_atom(atom)
 
+    return pdb
+
+
+def extract_amino_chain(chains: List[List[AtomRecord]]) -> str:
     unique_amino_acids_chains = []
     for chain in chains:
         unique_amino_atom = set()
@@ -133,7 +177,50 @@ def main():
         amino_chain_string = ''.join([value for key, value in amino_chain])
         amino_chain_string_list.add(amino_chain_string)
 
-    print(amino_chain_string_list)
+    return str(amino_chain_string_list)
+
+
+def change_occupancy(pdb_file, output_file: str, occupancy: List[str], chain_id: Union[List[str], str, None] = "ALL"):
+    ATOM_RECORD_FIELDS = {
+        "ChainID": slice(21, 22),
+        "Occupancy": slice(54, 60),
+    }
+    changes = {}
+    if chain_id is None:
+        chain_id = "ALL"
+        changes[chain_id] = occupancy[0]
+    else:
+        for key, value in zip(chain_id, occupancy):
+            changes[key] = value
+
+    with open(output_file, "w") as results:
+        for line in pdb_file:
+            if line.startswith("ATOM"):
+                atom_chain_id = line[ATOM_RECORD_FIELDS["ChainID"]].strip()
+                num_white_spaces = (ATOM_RECORD_FIELDS["Occupancy"].stop - ATOM_RECORD_FIELDS["Occupancy"].start)
+                if atom_chain_id in changes.keys():
+                    occ = f'{changes[atom_chain_id]: >{num_white_spaces}}'
+                elif chain_id == "ALL":
+                    occ = f'{changes[chain_id]: >{num_white_spaces}}'
+                line = line[:ATOM_RECORD_FIELDS["Occupancy"].start] + occ + line[ATOM_RECORD_FIELDS["Occupancy"].stop:]
+            results.write(line)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='PDB Tools')
+    sub_parsers = parser.add_subparsers(help="help", dest='command')
+
+    change_occupancy_parser = sub_parsers.add_parser('change-occupancy', help="help")
+    change_occupancy_parser.add_argument('-i', '--input', dest='input_file_name', help="File to parse",required=True)
+    change_occupancy_parser.add_argument('-o', '--output', dest='output_file_name', help="File output", required=True)
+    change_occupancy_parser.add_argument('--occupancy', dest='occupancy', type=str, nargs='*', help="Occupancy number", required=True)
+    change_occupancy_parser.add_argument('--chain-id', dest='chain_id', type=str, nargs='*', help="Chain ID to change occupancy to")
+
+    args = parser.parse_args()
+
+    if args.command == "change-occupancy":
+        with open(args.input_file_name, "r") as fh:
+            change_occupancy(pdb_file=fh, output_file=args.output_file_name, occupancy=args.occupancy, chain_id=args.chain_id)
 
 
 if __name__ == '__main__':
